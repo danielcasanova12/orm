@@ -1,0 +1,14 @@
+import orm
+
+main
+    Database database = new Database(":memory:")
+    Schema schema = new Schema()
+    schema.id("id").text("name").real("value")
+    int rc = database.create_table("smoke", schema)
+    Table table = database.table("smoke")
+    Record record = new Record()
+    record.text("name", "Daniel").real("value", 42.5)
+    rc = table.insert(record)
+    if rc==0 and table.count()==1
+        print("PACKAGE orm PASS")
+    database.close()

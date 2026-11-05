@@ -1,0 +1,642 @@
+import db
+
+class Record
+    array<str> names, texts
+    array<int> kinds, integers
+    array<float> reals
+    int valid
+
+    ctor()
+        self.valid = 1
+
+    def int append_slot(str name)
+        self.names.append(name)
+        self.texts.append("")
+        self.integers.append(0)
+        self.reals.append(0.0)
+        self.kinds.append(0)
+        return self.names.size()-1
+
+    def int slot(str name)
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return -1
+        for i=0, i<self.names.size()
+            if self.names[i]==name
+                return i
+        return self.append_slot(name)
+
+    def Record integer(str name, int value)
+        int i = self.slot(name)
+        if i>=0
+            self.kinds[i] = 1
+            self.integers[i] = value
+        return self
+
+    def Record real(str name, float value)
+        int i = self.slot(name)
+        if i>=0
+            self.kinds[i] = 2
+            self.reals[i] = value
+        return self
+
+    def Record text(str name, str value)
+        int i = self.slot(name)
+        if i>=0
+            self.kinds[i] = 3
+            self.texts[i] = value
+        return self
+
+    def Record null_value(str name)
+        int i = self.slot(name)
+        if i>=0
+            self.kinds[i] = 0
+        return self
+
+    def int push_int(int value)
+        int i = self.append_slot("parameter")
+        self.kinds[i] = 1
+        self.integers[i] = value
+        return 0
+
+    def int push_float(float value)
+        int i = self.append_slot("parameter")
+        self.kinds[i] = 2
+        self.reals[i] = value
+        return 0
+
+    def int push_text(str value)
+        int i = self.append_slot("parameter")
+        self.kinds[i] = 3
+        self.texts[i] = value
+        return 0
+
+    def int size()
+        return self.names.size()
+
+    def str columns_sql()
+        str sql = ""
+        for i=0, i<self.names.size()
+            if i>0
+                sql = sql + ", "
+            sql = sql + db_quote_ident(self.names[i])
+        return sql
+
+    def str placeholders()
+        str sql = ""
+        for i=0, i<self.names.size()
+            if i>0
+                sql = sql + ", "
+            sql = sql + "?"
+        return sql
+
+    def str assignments()
+        str sql = ""
+        for i=0, i<self.names.size()
+            if i>0
+                sql = sql + ", "
+            sql = sql + db_quote_ident(self.names[i]) + " = ?"
+        return sql
+
+    def int bind(any statement, int offset)
+        if self.valid==0
+            return db_set_error("Record contem um identificador invalido")
+        for i=0, i<self.names.size()
+            int parameter = offset+i+1
+            int rc = 0
+            if self.kinds[i]==0
+                rc = db_bind_null(statement, parameter)
+            if self.kinds[i]==1
+                rc = db_bind_int(statement, parameter, self.integers[i])
+            if self.kinds[i]==2
+                rc = db_bind_float(statement, parameter, self.reals[i])
+            if self.kinds[i]==3
+                rc = db_bind_text(statement, parameter, self.texts[i])
+            if rc!=0
+                return rc
+        return 0
+
+class Schema
+    str definition
+    int valid
+
+    ctor()
+        self.definition = ""
+        self.valid = 1
+
+    def Schema add_column(str name, str kind)
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return self
+        str definition = self.definition
+        if definition.size()>0
+            definition = definition + ", "
+        self.definition = definition + quoted + " " + kind
+        return self
+
+    def Schema id(str name)
+        return self.add_column(name, "INTEGER PRIMARY KEY")
+
+    def Schema integer(str name)
+        return self.add_column(name, "INTEGER")
+
+    def Schema real(str name)
+        return self.add_column(name, "REAL")
+
+    def Schema text(str name)
+        return self.add_column(name, "TEXT")
+
+    def Schema foreign_key(str field, str table_name, str reference)
+        str column = db_quote_ident(field)
+        str table_sql = db_quote_ident(table_name)
+        str reference_sql = db_quote_ident(reference)
+        if column==""
+            self.valid = 0
+            return self
+        if table_sql==""
+            self.valid = 0
+            return self
+        if reference_sql==""
+            self.valid = 0
+            return self
+        str definition = self.definition
+        if definition.size()>0
+            definition = definition + ", "
+        self.definition = definition + "FOREIGN KEY (" + column + ") REFERENCES " + table_sql + " (" + reference_sql + ")"
+        return self
+
+class Database
+    any handle
+    int opened
+
+    ctor(str path)
+        self.handle = db_open(path)
+        self.opened = db_valid(self.handle)
+        if self.opened==1
+            int rc = db_exec(self.handle, "PRAGMA foreign_keys=ON")
+            if rc!=0
+                db_close(self.handle)
+                self.opened = 0
+
+    def int is_open()
+        return self.opened
+
+    def str error()
+        return db_error()
+
+    def int close()
+        if self.opened==0
+            return 0
+        int rc = db_close(self.handle)
+        if rc==0
+            self.opened = 0
+        return rc
+
+    def int execute(str sql)
+        if self.opened==0
+            return db_set_error("Database esta fechado")
+        return db_exec(self.handle, sql)
+
+    def int raw(str sql)
+        if self.opened==0
+            return db_set_error("Database esta fechado")
+        return db_sql(self.handle, sql)
+
+    def int begin()
+        return self.execute("BEGIN")
+
+    def int commit()
+        return self.execute("COMMIT")
+
+    def int rollback()
+        return self.execute("ROLLBACK")
+
+    def int changes()
+        if self.opened==0
+            db_set_error("Database esta fechado")
+            return -1
+        return db_changes(self.handle)
+
+    def int last_id()
+        if self.opened==0
+            db_set_error("Database esta fechado")
+            return -1
+        any statement = db_prepare(self.handle, "SELECT CASE WHEN last_insert_rowid() BETWEEN 0 AND 2147483647 THEN last_insert_rowid() ELSE -1 END")
+        if db_valid(statement)==0
+            return -1
+        int rc = db_step(statement)
+        int id = -1
+        if rc==100
+            id = db_column_int(statement, 0)
+        db_finalize(statement)
+        if id<0
+            db_set_error("Nao foi possivel ler o ID como int Neve de 32 bits")
+        return id
+
+    def int create_table(str name, Schema schema)
+        if schema.valid==0
+            return db_set_error("Schema contem um identificador invalido")
+        if schema.definition==""
+            return db_set_error("Schema precisa de pelo menos uma coluna")
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            return 21
+        return self.execute("CREATE TABLE IF NOT EXISTS " + quoted + " (" + schema.definition + ")")
+
+    def Table table(str name)
+        return new Table(self, name)
+
+class Rows
+    Database database
+    any statement
+    int closed, active, code
+
+    ctor(Database database, any statement)
+        self.database = database
+        self.statement = statement
+        self.closed = 0
+        self.active = 0
+        self.code = 0
+        if db_valid(statement)==0
+            self.closed = 1
+            self.code = 1
+
+    def int next()
+        self.active = 0
+        if self.closed==1
+            return 0
+        if self.code==101
+            return 0
+        if self.database.is_open()==0
+            self.code = db_set_error("Database esta fechado")
+            return 0
+        self.code = db_step(self.statement)
+        if self.code==100
+            self.active = 1
+            return 1
+        return 0
+
+    def int status()
+        return self.code
+
+    def int has_error()
+        if self.code==0
+            return 0
+        if self.code==100
+            return 0
+        if self.code==101
+            return 0
+        return 1
+
+    def int index(str name)
+        if self.closed==1
+            self.code = db_set_error("Rows esta fechado")
+            return -1
+        if self.active==0
+            self.code = db_set_error("Chame Rows.next antes de ler uma coluna")
+            return -1
+        int i = db_column_index(self.statement, name)
+        if i<0
+            self.code = 25
+        return i
+
+    def int integer(str name)
+        int i = self.index(name)
+        if i<0
+            return 0
+        return db_column_int(self.statement, i)
+
+    def float real(str name)
+        int i = self.index(name)
+        if i<0
+            return 0.0
+        return db_column_float(self.statement, i)
+
+    def str text(str name)
+        int i = self.index(name)
+        if i<0
+            return ""
+        return db_column_text(self.statement, i)
+
+    def int is_null(str name)
+        int i = self.index(name)
+        if i<0
+            return 1
+        return db_column_is_null(self.statement, i)
+
+    def int close()
+        if self.closed==1
+            return 0
+        self.active = 0
+        self.closed = 1
+        int rc = db_finalize(self.statement)
+        if rc!=0
+            self.code = rc
+        return rc
+
+def int orm_operator_ok(str operator)
+    if operator=="="
+        return 1
+    if operator=="!="
+        return 1
+    if operator=="<"
+        return 1
+    if operator=="<="
+        return 1
+    if operator==">"
+        return 1
+    if operator==">="
+        return 1
+    if operator=="LIKE"
+        return 1
+    return 0
+
+class Query
+    Database database
+    Record parameters
+    str table_sql, conditions, joins, columns, ordering
+    int valid, filter_count, max_rows
+
+    ctor(Database database, str table_name)
+        self.database = database
+        self.parameters = new Record()
+        self.table_sql = db_quote_ident(table_name)
+        self.conditions = ""
+        self.joins = ""
+        self.columns = ""
+        self.ordering = ""
+        self.valid = 1
+        self.filter_count = 0
+        self.max_rows = -1
+        if self.table_sql==""
+            self.valid = 0
+
+    def int add_condition(str clause)
+        if self.filter_count==0
+            self.conditions = " WHERE " + clause
+        else
+            self.conditions = self.conditions + " AND " + clause
+        self.filter_count = self.filter_count + 1
+        return 0
+
+    def int add_filter(str name, str operator)
+        if orm_operator_ok(operator)==0
+            self.valid = 0
+            return db_set_error("Operador de filtro invalido")
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return 21
+        return self.add_condition(quoted + " " + operator + " ?")
+
+    def Query filter_int(str name, str operator, int value)
+        if self.add_filter(name, operator)==0
+            self.parameters.push_int(value)
+        return self
+
+    def Query filter_float(str name, str operator, float value)
+        if self.add_filter(name, operator)==0
+            self.parameters.push_float(value)
+        return self
+
+    def Query filter_text(str name, str operator, str value)
+        if self.add_filter(name, operator)==0
+            self.parameters.push_text(value)
+        return self
+
+    def Query where_int(str name, int value)
+        return self.filter_int(name, "=", value)
+
+    def Query where_float(str name, float value)
+        return self.filter_float(name, "=", value)
+
+    def Query where_text(str name, str value)
+        return self.filter_text(name, "=", value)
+
+    def Query where_like(str name, str pattern)
+        return self.filter_text(name, "LIKE", pattern)
+
+    def Query where_null(str name)
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return self
+        self.add_condition(quoted + " IS NULL")
+        return self
+
+    def Query inner_join(str table_name, str left_column, str right_column)
+        str joined = db_quote_ident(table_name)
+        str left = db_quote_ident(left_column)
+        str right = db_quote_ident(right_column)
+        if joined==""
+            self.valid = 0
+            return self
+        if left==""
+            self.valid = 0
+            return self
+        if right==""
+            self.valid = 0
+            return self
+        self.joins = self.joins + " INNER JOIN " + joined + " ON " + left + " = " + right
+        return self
+
+    def Query field(str name)
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return self
+        str columns = self.columns
+        if columns.size()>0
+            columns = columns + ", "
+        self.columns = columns + quoted
+        return self
+
+    def Query column(str name, str alias)
+        str quoted = db_quote_ident(name)
+        str alias_sql = db_quote_ident(alias)
+        if quoted==""
+            self.valid = 0
+            return self
+        if alias_sql==""
+            self.valid = 0
+            return self
+        str columns = self.columns
+        if columns.size()>0
+            columns = columns + ", "
+        self.columns = columns + quoted + " AS " + alias_sql
+        return self
+
+    def Query order_by(str name)
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return self
+        self.ordering = " ORDER BY " + quoted + " ASC"
+        return self
+
+    def Query order_desc(str name)
+        str quoted = db_quote_ident(name)
+        if quoted==""
+            self.valid = 0
+            return self
+        self.ordering = " ORDER BY " + quoted + " DESC"
+        return self
+
+    def Query limit(int amount)
+        if amount<0
+            self.valid = 0
+            db_set_error("limit precisa ser maior ou igual a zero")
+        else
+            self.max_rows = amount
+        return self
+
+    def str from_sql()
+        return " FROM " + self.table_sql + self.joins + self.conditions
+
+    def str select_sql()
+        str columns = self.columns
+        if columns==""
+            columns = "*"
+        str sql = "SELECT " + columns + self.from_sql() + self.ordering
+        if self.max_rows>=0
+            sql = sql + " LIMIT ?"
+        return sql
+
+    def any prepare(str sql, Record parameters)
+        if self.database.is_open()==0
+            db_set_error("Database esta fechado")
+            return db_null_handle()
+        if self.valid==0
+            db_set_error("Query invalida: confira identificadores, operadores e limite")
+            return db_null_handle()
+        any statement = db_prepare(self.database.handle, sql)
+        if db_valid(statement)==0
+            return statement
+        int rc = parameters.bind(statement, 0)
+        if rc!=0
+            db_finalize(statement)
+            return db_null_handle()
+        return statement
+
+    def Rows select()
+        any statement = self.prepare(self.select_sql(), self.parameters)
+        if db_valid(statement)==1
+            if self.max_rows>=0
+                int rc = db_bind_int(statement, self.parameters.size()+1, self.max_rows)
+                if rc!=0
+                    db_finalize(statement)
+                    statement = db_null_handle()
+        return new Rows(self.database, statement)
+
+    def int count()
+        any statement = self.prepare("SELECT COUNT(*)" + self.from_sql(), self.parameters)
+        if db_valid(statement)==0
+            return -1
+        int rc = db_step(statement)
+        int count = -1
+        if rc==100
+            count = db_column_int(statement, 0)
+        db_finalize(statement)
+        return count
+
+    def int write_guard()
+        if self.filter_count==0
+            return db_set_error("update e delete precisam de um filtro where")
+        if self.joins.size()>0
+            return db_set_error("Use JOIN para consultar; altere a tabela por chave ou filtro")
+        if self.max_rows>=0
+            return db_set_error("limit so se aplica a select; nao e permitido em update ou delete")
+        return 0
+
+    def int update(Record values)
+        int rc = self.write_guard()
+        if rc!=0
+            return rc
+        if values.size()==0
+            return db_set_error("update precisa de pelo menos um campo")
+        str sql = "UPDATE " + self.table_sql + " SET " + values.assignments() + self.conditions
+        any statement = self.prepare(sql, values)
+        if db_valid(statement)==0
+            return 1
+        rc = self.parameters.bind(statement, values.size())
+        if rc==0
+            rc = db_step(statement)
+        if rc!=101
+            db_finalize(statement)
+            return rc
+        return db_finalize(statement)
+
+    def int delete()
+        int rc = self.write_guard()
+        if rc!=0
+            return rc
+        any statement = self.prepare("DELETE FROM " + self.table_sql + self.conditions, self.parameters)
+        if db_valid(statement)==0
+            return 1
+        rc = db_step(statement)
+        if rc!=101
+            db_finalize(statement)
+            return rc
+        return db_finalize(statement)
+
+class Table
+    Database database
+    str name
+
+    ctor(Database database, str name)
+        self.database = database
+        self.name = name
+
+    def Query query()
+        return new Query(self.database, self.name)
+
+    def int insert(Record values)
+        if values.size()==0
+            return db_set_error("insert precisa de pelo menos um campo")
+        Query query = self.query()
+        str sql = "INSERT INTO " + query.table_sql + " (" + values.columns_sql() + ") VALUES (" + values.placeholders() + ")"
+        any statement = query.prepare(sql, values)
+        if db_valid(statement)==0
+            return 1
+        int rc = db_step(statement)
+        if rc!=101
+            db_finalize(statement)
+            return rc
+        return db_finalize(statement)
+
+    def Rows all()
+        Query query = self.query()
+        return query.select()
+
+    def Rows find(int id)
+        Query query = self.where_int("id", id)
+        return query.select()
+
+    def Query where_int(str name, int value)
+        Query query = self.query()
+        return query.where_int(name, value)
+
+    def Query where_float(str name, float value)
+        Query query = self.query()
+        return query.where_float(name, value)
+
+    def Query where_text(str name, str value)
+        Query query = self.query()
+        return query.where_text(name, value)
+
+    def int update(int id, Record values)
+        Query query = self.where_int("id", id)
+        return query.update(values)
+
+    def int delete(int id)
+        Query query = self.where_int("id", id)
+        return query.delete()
+
+    def int count()
+        Query query = self.query()
+        return query.count()
+
+    def int last_id()
+        return self.database.last_id()

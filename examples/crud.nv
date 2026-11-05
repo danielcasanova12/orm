@@ -1,0 +1,86 @@
+import orm
+
+def int exemplo_falhou(Database database, str etapa)
+    print("Falha em ", etapa, ": ", database.error())
+    database.close()
+    return 1
+
+def int exemplo_orm()
+
+    Database database = new Database(":memory:")
+    if database.is_open()==0
+        return exemplo_falhou(database, "abrir banco")
+    Schema schema = new Schema()
+    schema.id("id").text("nome").integer("idade").real("saldo")
+    int rc = database.create_table("clientes", schema)
+    if rc!=0
+        return exemplo_falhou(database, "criar clientes")
+    Table clientes = database.table("clientes")
+
+    Record novo = new Record()
+    novo.text("nome", "Daniel").integer("idade", 30).real("saldo", 42.5)
+    rc = clientes.insert(novo)
+    if rc!=0
+        return exemplo_falhou(database, "inserir cliente")
+    int id = clientes.last_id()
+    print("Inserido cliente ID=", id)
+
+    Query query = clientes.where_text("nome", "Daniel")
+    query.filter_int("idade", ">=", 18).order_by("nome").limit(10)
+    Rows rows = query.select()
+    while rows.next()==1
+        print(rows.integer("id"), " / ", rows.text("nome"), " / idade=", rows.integer("idade"), " / saldo=", rows.real("saldo"))
+    rows.close()
+    if rows.has_error()==1
+        return exemplo_falhou(database, "consultar clientes")
+
+    Schema pedido_schema = new Schema()
+    pedido_schema.id("id").integer("cliente_id").text("produto").real("preco").foreign_key("cliente_id", "clientes", "id")
+    rc = database.create_table("pedidos", pedido_schema)
+    if rc!=0
+        return exemplo_falhou(database, "criar pedidos")
+    Table pedidos = database.table("pedidos")
+    Record pedido = new Record()
+    pedido.integer("cliente_id", id).text("produto", "Teclado").real("preco", 23.5)
+    rc = pedidos.insert(pedido)
+    if rc!=0
+        return exemplo_falhou(database, "inserir pedido")
+    int pedido_id = pedidos.last_id()
+
+    Query joined = pedidos.query()
+    joined.inner_join("clientes", "pedidos.cliente_id", "clientes.id")
+    joined.column("clientes.nome", "cliente").column("pedidos.produto", "produto").column("pedidos.preco", "preco")
+    joined.where_text("clientes.nome", "Daniel")
+    Rows joined_rows = joined.select()
+    while joined_rows.next()==1
+        print("Pedido: ", joined_rows.text("cliente"), " / ", joined_rows.text("produto"), " / preco=", joined_rows.real("preco"))
+    joined_rows.close()
+    if joined_rows.has_error()==1
+        return exemplo_falhou(database, "consultar JOIN")
+
+    Record alteracoes = new Record()
+    alteracoes.real("saldo", 99.5)
+    rc = clientes.update(id, alteracoes)
+    if rc!=0
+        return exemplo_falhou(database, "atualizar saldo")
+    print("Update: ", database.changes(), " linha(s) alterada(s)")
+
+    rc = pedidos.delete(pedido_id)
+    if rc!=0
+        return exemplo_falhou(database, "excluir pedido")
+    rc = clientes.delete(id)
+    if rc!=0
+        return exemplo_falhou(database, "excluir cliente")
+    print("Clientes restantes: ", clientes.count())
+    rc = database.close()
+    if rc!=0
+        print("Falha ao fechar banco: ", database.error())
+        return 1
+    return 0
+
+main
+    int resultado = exemplo_orm()
+    if resultado==0
+        print("EXEMPLO ORM CONCLUIDO")
+    else
+        print("EXEMPLO ORM FALHOU")
